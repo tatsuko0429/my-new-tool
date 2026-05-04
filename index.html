@@ -1,4 +1,12 @@
 <!doctype html>
+<!--
+  2026年4月27日時点の開発者向け保守メモ:
+  このファイルは「SVGコードを貼り付け、表示テキストを編集し、PNG/PDF/TXTとして保存し、履歴をブラウザ内に残す」単一HTMLアプリです。
+  HTMLは固定の操作面、CSSはレスポンシブ表示とモーダル/履歴/プレビューの見た目、JavaScriptはSVGの安全化・編集・保存・履歴管理を担当します。
+  2026年4月27日時点ではログイン、カテゴリ切り替え、繰り返し予定、サーバー同期は存在しません。追加する場合は初期表示・保存領域・削除範囲の仕様を新しく定義してください。
+  既存仕様を守るため、DOMのid、保存キー、IndexedDB名、イベント処理順、出力時のSVG正規化、履歴ID生成は安易に変更しないでください。
+  site.webmanifest はJSONのためコメントを入れられません。PWA名・start_url・アイコンパスを変える場合は、このhead内のmanifest/iconリンクと実ファイルの整合を同時に確認してください。
+-->
 <html lang="ja">
 <head>
   <meta charset="utf-8">
@@ -9,12 +17,20 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="site.webmanifest">
+  <!-- manifestと下記アイコン群はインストール時の表示名・起動URL・ホーム画面アイコンに直結するため、assets/icons配下のPNG名変更時は必ず同時更新する。 -->
   <link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16.png">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
   <link rel="shortcut icon" href="assets/icons/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png">
   <title>SVG = 画像</title>
   <style>
+    /*
+      2026年4月27日時点の開発者向け保守メモ:
+      CSSはこの単一HTMLアプリの全画面を担当する。クラス名はHTMLの固定構造とJSのclassList操作に使われるため、見た目だけの変更でもJS内検索対象を確認すること。
+      主要な結合点は is-empty / is-hidden / is-error / is-visible / is-open / is-active / is-focused と、preview-stage・history-*・modal-* 系のクラス。
+      レスポンシブ指定は3カラム作業画面を2カラム/1カラムへ落とす業務利用前提のため、幅や最小高さを触った後はPC幅・タブレット幅・スマホ幅で入力、プレビュー、履歴ボタンの折り返しを確認する。
+      このアプリはCSSの @media print ではなくJS生成のPDF保存で印刷相当の出力を行う。印刷レイアウトを追加する場合も、既存のPDF生成仕様と混同しないこと。
+    */
     :root {
       color-scheme: light;
       --bg-base: #f4efe5;
@@ -697,6 +713,7 @@
     }
 
     @media (max-width: 1200px) {
+      /* 履歴パネルだけを下段へ送る前提。HTMLの3パネル構成を変える場合は、このgrid-column指定も再確認する。 */
       .workspace {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
@@ -707,6 +724,7 @@
     }
 
     @media (max-width: 820px) {
+      /* モバイルでは操作ボタンを1列にし、誤タップと文字あふれを避ける。ボタン文言変更時はこの幅で必ず確認する。 */
       .shell {
         border-radius: 28px;
       }
@@ -748,6 +766,7 @@
     }
 
     @media (pointer: coarse) {
+      /* タッチ端末向けの操作面積をCSS変数でまとめている。個別ボタンだけ小さくすると業務中の連続操作で押し間違いが増える。 */
       :root {
         --touch-target: 54px;
       }
@@ -774,6 +793,12 @@
   </style>
 </head>
 <body>
+  <!--
+    画面構造の保守メモ:
+    上から「SVG入力/テキスト編集」「プレビューとPNG/PDF保存」「履歴操作」の3パネルで、JSは各idを起点にDOM参照する。
+    入力欄はSVG解析後にreadOnlyへ切り替わり、表示テキスト編集欄から同期する仕様。未解析の自由入力状態と解析済み編集状態を混ぜないこと。
+    確認モーダルは全削除・個別削除・入力クリア・エラー通知で共有しているため、文言やボタン構成を変える場合はDialogService全体の呼び出し元を確認する。
+  -->
   <main class="page">
     <div class="shell">
       <section class="hero" aria-label="ツール概要">
@@ -781,6 +806,7 @@
       </section>
 
       <section class="workspace" aria-label="SVG作業エリア">
+        <!-- 入力パネル: 初回貼り付けと解析後の表示テキスト編集を同居させている。svgInput / textFieldList / statusLine / warningBox のidはJSの状態遷移と直結する。 -->
         <article class="panel editor-panel">
           <div class="panel-head panel-head--between">
             <h2 class="panel-title">SVGコード貼り付け</h2>
@@ -812,6 +838,7 @@
           </div>
         </article>
 
+        <!-- 出力パネル: previewStageの中身はJSがSVGノードで丸ごと差し替える。静的な子要素を追加するとreplaceChildrenで消える点に注意。 -->
         <article class="panel preview-panel">
           <div class="panel-head panel-head--between">
             <h2 class="panel-title">プレビューと保存</h2>
@@ -828,6 +855,7 @@
           </div>
         </article>
 
+        <!-- 履歴パネル: IndexedDB/localStorageの保存データをJSで描画する領域。履歴カードのボタンはdata-action/data-idによるイベント委譲で処理する。 -->
         <article class="panel history-panel">
           <div class="panel-head">
             <h2 class="panel-title">出力履歴</h2>
@@ -851,6 +879,7 @@
     </div>
   </main>
 
+  <!-- 共有モーダル: キーボードフォーカス復帰とTab閉じ込めをDialogServiceが担う。削除確認などの業務上の安全装置なので、直接displayを操作しない。 -->
   <div id="modalLayer" class="modal-layer" role="presentation">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalMessage">
       <h2 id="modalTitle">確認</h2>
@@ -864,15 +893,34 @@
 
   <script>
     (() => {
+      /*
+        2026年4月27日時点の開発者向け保守メモ:
+        JavaScriptは即時関数内に閉じた単一アプリ実装。上から「定数/状態/DOM参照」「端末振動」「共有モーダル」「履歴保存」「SVG解析と編集」「PNG/PDF/TXT出力」「画面描画とイベント」「初期化」の順で並ぶ。
+        挙動の不変条件:
+        - 初期表示は入力待機、プレビュー待機、履歴読込済み、保存ボタン無効で始める。
+        - SVG解析後は入力欄をreadOnlyにし、表示テキスト欄からstate.currentDocumentを再合成する。
+        - 履歴は同一SVG出力文字列のハッシュをIDにし、既存レコードへ出力形式を追記する。
+        - 保存先はブラウザ内のみ。IndexedDBが使えない場合だけlocalStorageのSTORAGE_KEYへフォールバックする。
+        - PNG/PDF/TXTのファイル名は端末ローカル時刻で生成する。日付形式変更は利用者の保存順確認に影響する。
+        - ログインやサーバー認証はない。履歴削除は現在のブラウザ保存領域だけに作用し、外部アカウントや共有領域は存在しない。
+        変更時の最低確認:
+        1. 空入力、壊れたSVG、安全化警告つきSVG、テキストありSVG、テキストなしSVGを貼り付ける。
+        2. テキスト編集後にプレビュー、入力欄、PNG保存、PDF保存、履歴再読込、TXT保存が一致するか確認する。
+        3. 個別削除、全削除、入力クリア、モーダルのEsc/背景クリック/Tab移動を確認する。
+      */
       const HISTORY_SCHEMA_VERSION = 2;
       const MAX_HISTORY_ITEMS = 50;
+      // localStorageはIndexedDB失敗時だけ使うフォールバック。キー変更は既存利用者の履歴消失に直結する。
       const STORAGE_KEY = "svg-export-history-fallback";
+      // 入力中の再解析回数を抑えるための待ち時間。短くしすぎると大きなSVGで入力遅延が出る。
       const PREVIEW_DEBOUNCE_MS = 320;
+      // テキスト編集はプレビュー・SVGコード・保存データを同時に更新するため、入力体感と安定性のバランスをここで取っている。
       const TEXT_EDIT_DEBOUNCE_MS = 120;
       const textEncoder = new TextEncoder();
       const historyPreviewCache = new Map();
 
       const state = {
+        // currentDocumentは「安全化済みSVG定義」と「表示/出力用に合成済みSVG」を持つ中心状態。DOMの表示だけを直接書き換えない。
         currentDocument: null,
         historyItems: [],
         selectedHistoryId: null,
@@ -884,6 +932,7 @@
       };
 
       const dom = {
+        // HTML側のidと1対1で結合している。id変更時はここだけでなく、CSS・イベント委譲・aria参照も同時確認する。
         svgInput: document.getElementById("svgInput"),
         clearButton: document.getElementById("clearButton"),
         saveImageButton: document.getElementById("saveImageButton"),
@@ -904,6 +953,7 @@
       };
 
       const HapticService = (() => {
+        // 触覚フィードバックは補助機能。非対応端末やブラウザ例外では必ず無視して本体操作を止めない。
         const tapPattern = 12;
 
         function canVibrate() {
@@ -947,6 +997,7 @@
       })();
 
       const DialogService = (() => {
+        // このモーダルは削除確認と通知を共用する。resolverは同時に1件だけ扱う前提なので、連続openを追加する場合は競合に注意する。
         let resolver = null;
         let lastFocusedElement = null;
 
@@ -956,6 +1007,7 @@
         }
 
         function close(result) {
+          // 呼び出し元のボタンへフォーカスを戻す仕様。キーボード操作の回帰が出やすいため、DOM構造変更時は必ず確認する。
           dom.modalLayer.classList.remove("is-open");
           if (resolver) {
             const currentResolver = resolver;
@@ -997,6 +1049,7 @@
         });
 
         async function open(options) {
+          // showCancelの有無でボタン数とgrid構成を切り替える。hidden属性とis-singleクラスはCSSとセットで維持する。
           lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
           dom.modalTitle.textContent = options.title;
           dom.modalMessage.textContent = options.message;
@@ -1041,6 +1094,7 @@
       })();
 
       const StorageService = (() => {
+        // IndexedDBを第一保存先にし、使えない環境だけlocalStorageへ落とす。両者は同じ非同期API形状にそろえて呼び出し側を単純化している。
         let backendPromise = null;
 
         function requestToPromise(request) {
@@ -1051,6 +1105,7 @@
         }
 
         function createLocalBackend() {
+          // フォールバックは1キーに配列で保存するため、容量上限とJSON破損に弱い。大量保存機能を追加するならIndexedDB側を基準に設計する。
           function readAll() {
             try {
               const raw = localStorage.getItem(STORAGE_KEY);
@@ -1082,6 +1137,7 @@
                 items.push(record);
               }
               items.sort((a, b) => b.updatedAt - a.updatedAt);
+              // 履歴上限はIndexedDB側と同じ50件。片方だけ変えると環境によって保持件数がずれる。
               writeAll(items.slice(0, MAX_HISTORY_ITEMS));
             },
             async remove(id) {
@@ -1095,6 +1151,7 @@
         }
 
         async function createIndexedDbBackend() {
+          // DB名・objectStore名・keyPathは既存履歴の保存場所。不用意な変更は移行処理なしの履歴消失になる。
           if (!("indexedDB" in window)) {
             throw new Error("IndexedDB は利用できません。");
           }
@@ -1137,6 +1194,7 @@
               });
               const items = await this.getAll();
               if (items.length > MAX_HISTORY_ITEMS) {
+                // 古い履歴だけを削る仕様。削除対象の基準はgetAllのupdatedAt降順に依存している。
                 await withStore("readwrite", (store) => {
                   items.slice(MAX_HISTORY_ITEMS).forEach((item) => {
                     store.delete(item.id);
@@ -1159,6 +1217,7 @@
 
         async function getBackend() {
           if (!backendPromise) {
+            // 初期化を1回だけに固定して、操作中に保存先が切り替わらないようにしている。
             backendPromise = createIndexedDbBackend().catch((error) => {
               console.warn(error);
               return createLocalBackend();
@@ -1195,6 +1254,7 @@
       })();
 
       const SvgService = (() => {
+        // SVGの解析・安全化・表示テキスト抽出・再合成をまとめる中核。ここを変えたらプレビュー、PNG/PDF、履歴プレビュー、TXT保存の全経路を確認する。
         const blockedTags = new Set([
           "script",
           "foreignObject",
@@ -1210,6 +1270,7 @@
           "button"
         ]);
         const editableTextParentTags = new Set(["text", "tspan", "textpath"]);
+        // title/desc/styleなど、画面上の文字ではないテキストノードを編集対象にしないための除外リスト。
         const nonVisibleTextAncestors = new Set([
           "title",
           "desc",
@@ -1226,6 +1287,7 @@
         ]);
 
         function parseLengthToPx(value) {
+          // width/height属性の単位をpxへ寄せる。未知単位や0以下はviewBox/既定値へフォールバックさせる。
           if (!value) return null;
           const match = String(value).trim().match(/^([-+]?\d*\.?\d+)(px|pt|pc|mm|cm|in|q)?$/i);
           if (!match) return null;
@@ -1301,6 +1363,7 @@
         }
 
         function sanitizeSvgElement(root) {
+          // 入力SVGはそのままDOMへ入れない。外部参照やイベント属性を落とし、プレビューと保存の安全性を優先する。
           const warnings = new Set();
           const sanitizedRoot = root.cloneNode(true);
           const allElements = [sanitizedRoot, ...sanitizedRoot.querySelectorAll("*")];
@@ -1338,6 +1401,7 @@
               if (lowerName === "href" || lowerName === "xlink:href" || lowerName === "src") {
                 const safeReference = value.trim();
                 if (!safeReference.startsWith("#") && !safeReference.startsWith("data:")) {
+                  // 外部画像や外部use参照は環境差・CORS・保存失敗の原因になるため許可しない。
                   element.removeAttribute(name);
                   warnings.add("外部参照はプレビューと出力の安定性のため除外しました。");
                 }
@@ -1362,6 +1426,7 @@
         }
 
         function getDimensions(svgElement) {
+          // 出力サイズは width/height > 片方+viewBox > viewBox > 800x600 の順で決める。保存画像とPDFページサイズの基準でもある。
           const widthFromAttribute = parseLengthToPx(svgElement.getAttribute("width"));
           const heightFromAttribute = parseLengthToPx(svgElement.getAttribute("height"));
           const viewBox = parseViewBox(svgElement.getAttribute("viewBox"));
@@ -1386,6 +1451,7 @@
         }
 
         function createExportString(svgElement, dimensions) {
+          // 保存・履歴・再読込の基準になるSVG文字列。width/height/viewBoxを補完して、出力ごとのサイズブレを避ける。
           const exportRoot = svgElement.cloneNode(true);
           exportRoot.setAttribute("width", String(Math.round(dimensions.width)));
           exportRoot.setAttribute("height", String(Math.round(dimensions.height)));
@@ -1428,6 +1494,7 @@
         }
 
         function createNodePath(node, root) {
+          // 編集対象テキストはDOMのchildNodes位置で追跡する。SVG文字列置換に戻すと同じ文言が複数ある場合に誤更新する。
           const path = [];
           let current = node;
           while (current && current !== root) {
@@ -1549,6 +1616,7 @@
         }
 
         function compose(definition, options = {}) {
+          // definition.sourceSvgStringから毎回再パースして合成する。前回プレビューDOMを直接変更しないことで、保存文字列と表示のズレを防ぐ。
           const parser = new DOMParser();
           const documentNode = parser.parseFromString(definition.sourceSvgString, "image/svg+xml");
           const root = documentNode.documentElement;
@@ -1576,6 +1644,7 @@
         }
 
         function parse(input) {
+          // 入力から「安全化済み定義」と「初回描画結果」を同時に返す。失敗時は呼び出し側が状態をリセットする前提。
           if (!input.trim()) {
             return {
               ok: false,
@@ -1626,7 +1695,9 @@
       })();
 
       const ExportService = (() => {
+        // 保存処理はブラウザ標準APIだけで完結させている。外部ライブラリを入れる場合はオフライン利用と単一HTML配布の前提を再確認する。
         function filenameStamp() {
+          // 端末のローカル時刻でファイル名を作る。履歴表示のIntl形式とは別なので、両方の仕様を混同しない。
           const now = new Date();
           const parts = [
             now.getFullYear(),
@@ -1659,6 +1730,7 @@
         }
 
         function downloadBlob(blob, fileName) {
+          // a[download]による即時保存。Object URLは遅延revokeして、クリック直後にURLが消えるブラウザ差を避ける。
           const url = URL.createObjectURL(blob);
           const link = document.createElement("a");
           link.href = url;
@@ -1680,6 +1752,7 @@
         }
 
         async function renderCanvas(svgString, dimensions, options = {}) {
+          // PNG/PDF共通のラスタライズ処理。scale上限は大きなSVGでメモリを使いすぎないための業務上の安全策。
           const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
           const objectUrl = URL.createObjectURL(blob);
           try {
@@ -1739,6 +1812,7 @@
 
         // 最小構成のPDFを組み立てて JPEG 画像を1ページに配置する。
         function buildPdfBlob(jpegBytes, imageWidthPx, imageHeightPx, pageWidthPx, pageHeightPx) {
+          // PDFはSVGを直接埋め込まず、白背景JPEGを1ページに貼る。透明背景のPNG保存とは見た目が異なる前提で維持する。
           const pageLimit = 14400;
           let pageWidth = pageWidthPx * 0.75;
           let pageHeight = pageHeightPx * 0.75;
@@ -1803,12 +1877,14 @@
         }
 
         async function saveAsPng(svgDocument) {
+          // PNGは透明背景を維持する。PDF側の白背景指定とは分けて考える。
           const canvas = await renderCanvas(svgDocument.exportSvgString, svgDocument.dimensions);
           const pngBlob = await canvasToBlob(canvas, "image/png");
           downloadBlob(pngBlob, buildFilename("png"));
         }
 
         async function saveAsPdf(svgDocument) {
+          // PDFは印刷・共有時の白紙背景を優先して白背景でJPEG化する。透明背景が必要な場合はPNG保存を使う仕様。
           const canvas = await renderCanvas(svgDocument.exportSvgString, svgDocument.dimensions, { background: "white" });
           const jpegBlob = await canvasToBlob(canvas, "image/jpeg", 0.92);
           const jpegBytes = new Uint8Array(await jpegBlob.arrayBuffer());
@@ -1836,6 +1912,7 @@
       })();
 
       function setStatus(message, isError = false) {
+        // statusLineは空入力時の案内とエラー表示を兼ねる。エラー中は入力があっても隠さない仕様。
         state.statusIsError = isError;
         dom.statusLine.textContent = message;
         dom.statusLine.classList.toggle("is-error", isError);
@@ -1859,11 +1936,13 @@
       }
 
       function setSvgInputLock(isLocked) {
+        // 解析済みSVGはテキスト編集欄からのみ更新する。readOnlyを外す場合はcurrentDocumentとの同期崩れに注意する。
         dom.svgInput.readOnly = isLocked;
         updateStatusLineVisibility();
       }
 
       function updateActionButtons() {
+        // 保存ボタンはcurrentDocumentがあり、非busyのときだけ有効。入力文字列だけを見て有効化しない。
         const isReady = !!state.currentDocument && !state.isBusy;
         const hasInput = !!dom.svgInput.value.trim();
         dom.saveImageButton.disabled = !isReady;
@@ -1880,6 +1959,7 @@
       }
 
       function renderPreview(documentState) {
+        // プレビューは合成済みSVGノードで置き換える。警告表示とサイズ表示も同じタイミングで更新して不整合を避ける。
         dom.previewStage.classList.remove("is-empty");
         dom.previewStage.replaceChildren(documentState.rendered.previewNode);
         dom.sizeMeta.textContent = "サイズ " + Math.round(documentState.definition.dimensions.width) + " × " + Math.round(documentState.definition.dimensions.height);
@@ -1891,6 +1971,7 @@
       }
 
       function serializeBulkTextItems(textItems) {
+        // 1テキストノード=1行の対応が更新ロジックの不変条件。内部改行はスペースへ正規化する。
         return textItems.map((item) => normalizeBulkEditorValue(item.value)).join("\n");
       }
 
@@ -1901,6 +1982,7 @@
       }
 
       function renderTextFieldList() {
+        // 現行UIは個別入力ではなく一括textarea。行数がtextItems数と一致することを更新時に検証する。
         dom.textFieldList.replaceChildren();
 
         const empty = document.createElement("div");
@@ -1929,6 +2011,7 @@
       }
 
       function resetLoadedDocumentState() {
+        // 入力クリアや解析失敗時は、解析済み状態・フォーカス・プレビュー・テキスト欄をまとめて初期状態へ戻す。
         window.clearTimeout(state.textEditTimer);
         state.currentDocument = null;
         state.focusedTextId = null;
@@ -1939,6 +2022,7 @@
       }
 
       function composeCurrentDocument(options = {}) {
+        // テキスト編集後の唯一の同期口。プレビューとSVG入力欄を同じexportSvgStringでそろえる。
         if (!state.currentDocument) {
           return false;
         }
@@ -1985,6 +2069,7 @@
       }
 
       function updateBulkTextValue(value) {
+        // 行数変更を拒否しているのは、各行とSVG内テキストノードの対応を壊さないため。
         if (!state.currentDocument) return;
         const lines = String(value).replace(/\r\n/g, "\n").split("\n");
         if (lines.length !== state.currentDocument.definition.textItems.length) {
@@ -2012,6 +2097,7 @@
       }
 
       function normalizeHistoryRecord(record) {
+        // 旧schemaや欠損データを画面表示できる形へ寄せる。schemaVersionを上げる場合も過去履歴の読み込み互換を残す。
         return {
           id: record.id,
           label: record.label || "SVG",
@@ -2027,6 +2113,7 @@
       }
 
       function createHistoryPreview(item) {
+        // 履歴プレビューもSvgService.parseを通す。保存済みSVGが古くても、現在の安全化ルールで表示できる範囲だけ描画する。
         const cached = historyPreviewCache.get(item.id);
         if (cached && cached.svg === item.svg) {
           return cached.node.cloneNode(true);
@@ -2057,6 +2144,7 @@
       }
 
       function formatDateTime(timestamp) {
+        // 履歴表示は日本語ロケールの分単位。ファイル名用タイムスタンプとは別仕様なので、片方だけ変更してよいか確認する。
         return new Intl.DateTimeFormat("ja-JP", {
           year: "numeric",
           month: "2-digit",
@@ -2067,6 +2155,7 @@
       }
 
       function renderHistoryList() {
+        // 履歴カードは毎回再生成し、クリックはhistoryListのイベント委譲で処理する。ボタン追加時はdata-action分岐を必ず追加する。
         dom.historyList.replaceChildren();
 
         if (!state.historyItems.length) {
@@ -2150,6 +2239,7 @@
       }
 
       function hashString(input) {
+        // 履歴IDは出力SVG文字列のハッシュ。ラベルや保存形式ではなく内容同一性で上書き/追記される。
         let hash = 0x811c9dc5;
         for (let index = 0; index < input.length; index += 1) {
           hash ^= input.charCodeAt(index);
@@ -2166,6 +2256,7 @@
       }
 
       async function saveCurrentToHistory(format) {
+        // 保存ボタン実行後にだけ履歴へ記録する。プレビューしただけのSVGは履歴に残さない仕様。
         if (!state.currentDocument) return;
         const now = Date.now();
         const { definition, rendered } = state.currentDocument;
@@ -2191,6 +2282,7 @@
       }
 
       function parseAndRender(rawSvg, options = {}) {
+        // 入力欄から解析済み編集状態へ移行する入口。成功時にsvgInputをreadOnlyへ切り替えるため、以後の変更はcomposeCurrentDocument経由にする。
         if (!rawSvg.trim()) {
           resetLoadedDocumentState();
           setStatus("入力待機中");
@@ -2222,6 +2314,7 @@
       }
 
       function schedulePreview() {
+        // readOnly中は入力欄が合成結果表示用になるため、自動再解析を走らせない。
         if (dom.svgInput.readOnly) return;
         window.clearTimeout(state.previewTimer);
         state.previewTimer = window.setTimeout(() => {
@@ -2230,6 +2323,7 @@
       }
 
       async function withBusy(task) {
+        // 保存や削除の二重実行を防ぐガード。新しい非同期操作を足す場合はこのラッパー利用を優先する。
         if (state.isBusy) return;
         state.isBusy = true;
         updateActionButtons();
@@ -2242,6 +2336,7 @@
       }
 
       async function handleExport(format) {
+        // 保存直前に未反映のテキスト編集を必ず合成する。ここを飛ばすとプレビューと出力ファイルがずれる。
         window.clearTimeout(state.textEditTimer);
         if (state.currentDocument) {
           if (!composeCurrentDocument()) {
@@ -2270,6 +2365,7 @@
       }
 
       async function loadHistoryItem(id) {
+        // 履歴読込は保存済みSVGを入力欄に戻してから通常の解析フローへ通す。過去データも現在の安全化/編集抽出ルールが適用される。
         if (state.isBusy) return;
         const item = state.historyItems.find((entry) => entry.id === id);
         if (!item) return;
@@ -2282,6 +2378,7 @@
       }
 
       async function deleteHistoryItem(id) {
+        // 個別削除は選択したidだけを保存領域から消す。現在入力中のSVG本文は消さない。
         if (state.isBusy) return;
         const item = state.historyItems.find((entry) => entry.id === id);
         if (!item) return;
@@ -2302,6 +2399,7 @@
       }
 
       function downloadHistoryText(id) {
+        // TXT保存は履歴のSVGコードを書き出す補助機能。履歴データ自体は変更しない。
         const item = state.historyItems.find((entry) => entry.id === id);
         if (!item) return;
         ExportService.saveTextFile(item.svg, ExportService.buildHistoryTextFilename(item.label || item.id));
@@ -2309,7 +2407,9 @@
       }
 
       function bindEvents() {
+        // イベント登録は初期化時に1回だけ行う。動的に生成される履歴ボタンとテキスト欄は親要素でイベント委譲する。
         dom.svgInput.addEventListener("input", () => {
+          // 入力が変わった時点で履歴選択状態を外す。選択中の履歴を編集中の内容と誤認させないため。
           state.selectedHistoryId = null;
           if (!dom.svgInput.value.trim()) {
             setStatus("入力待機中");
@@ -2325,6 +2425,7 @@
           renderHistoryList();
         });
         dom.clearButton.addEventListener("click", async () => {
+          // クリアは入力欄と解析済み状態だけを戻す。保存済み履歴は削除しない。
           if (!dom.svgInput.value.trim()) return;
           const confirmed = await DialogService.confirm(
             "入力内容をクリアしますか",
@@ -2344,6 +2445,7 @@
         dom.saveImageButton.addEventListener("click", () => handleExport("png"));
         dom.savePdfButton.addEventListener("click", () => handleExport("pdf"));
         dom.textFieldList.addEventListener("input", (event) => {
+          // 現行UIではbulkだけが実質使用される。個別textareaを復活させる場合に備え、textId分岐は残している。
           const target = event.target;
           if (!(target instanceof HTMLTextAreaElement)) return;
           if (target.dataset.editorMode === "bulk") {
@@ -2367,6 +2469,7 @@
           }, 0);
         });
         dom.clearHistoryButton.addEventListener("click", async () => {
+          // 全履歴削除は保存領域全体とプレビューキャッシュだけを消す。現在の入力/プレビューは維持される。
           if (!state.historyItems.length) return;
           const confirmed = await DialogService.confirm(
             "履歴をすべて削除しますか",
@@ -2384,6 +2487,7 @@
           });
         });
         dom.historyList.addEventListener("click", (event) => {
+          // 履歴カード内ボタンのdata-actionで処理を分ける。HTML文字列生成ではなくDOM生成なので、XSS面でもこの形を維持する。
           const target = event.target;
           if (!(target instanceof HTMLElement)) return;
           const action = target.dataset.action;
@@ -2400,6 +2504,7 @@
       }
 
       async function init() {
+        // 初期化順序が重要。イベント登録後に保存先を初期化し、履歴を描画してから初期表示へ整える。
         HapticService.bind();
         bindEvents();
         await StorageService.init();
